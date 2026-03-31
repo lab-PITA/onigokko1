@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>1台で鬼ごっこゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #game-container {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            border: 4px solid #333;
+            overflow: hidden;
+            background-color: #fff;
+            box-shadow: 0 0 20px rgba(0,0,0,0.2);
+        }
+        canvas {
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(255, 255, 255, 0.95);
+            z-index: 10;
+        }
+        #title-screen, #gameover-screen, #rule-screen {
+            text-align: center;
+            padding: 40px;
+        }
+        #rule-screen {
+            text-align: left;
+            max-width: 600px;
+        }
+        #rule-screen h2 {
+            text-align: center;
+        }
+        #rule-screen ul {
+            font-size: 18px;
+            line-height: 1.6;
+        }
+        #status-bar {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+            z-index: 5;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        .hidden {
+            display: none !important;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 20px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            margin: 10px;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.rule-btn {
+            background-color: #2196F3;
+        }
+        button.rule-btn:hover {
+            background-color: #1e88e5;
+        }
+    }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="status-bar" class="hidden">
+            <div>残り時間: <span id="time-left">60</span>秒</div>
+            <div>現在鬼: <span id="current-tagger" style="color: red;">P1 (赤)</span></div>
+        </div>
+        
+        <canvas id="game-canvas" width="800" height="600"></canvas>
+        
+        <div id="ui-layer">
+            <div id="title-screen">
+                <h1>1台で鬼ごっこ</h1>
+                <p>友達と1台のパソコンで遊ぼう！</p>
+                <button class="rule-btn" onclick="showRules()">ルール確認</button>
+                <button onclick="startGame()">ゲーム開始</button>
+            </div>
+            
+            <div id="rule-screen" class="hidden">
+                <h2>ルール説明</h2>
+                <ul>
+                    <li>一人が「鬼（赤色）」、もう一人が「逃げる側（青色）」になります。</li>
+                    <li>鬼は逃げる側に触れると、鬼が入れ替わります。</li>
+                    <li>制限時間内に鬼でないプレイヤーが勝ちです。</li>
+                    <li><b>プレイヤー1 (P1):</b> <span style="color: blue;">WASD</span>で移動</li>
+                    <li><b>プレイヤー2 (P2):</b> <span style="color: blue;">JKLI</span>で移動 (I=上, J=左, K=下, L=右)</li>
+                </ul>
+                <div style="text-align: center;">
+                    <button onclick="hideRules()">戻る</button>
+                </div>
+            </div>
+            
+            <div id="gameover-screen" class="hidden">
+                <h1 id="winner-text">結果</h1>
+                <p>ゲーム終了です！</p>
+                <button class="rule-btn" onclick="showRules()">ルールを再確認</button>
+                <button onclick="startGame()">もう一度遊ぶ</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const uiLayer = document.getElementById('ui-layer');
+        const statusBar = document.getElementById('status-bar');
+        const titleScreen = document.getElementById('title-screen');
+        const ruleScreen = document.getElementById('rule-screen');
+        const gameoverScreen = document.getElementById('gameover-screen');
+        const timeLeftSpan = document.getElementById('time-left');
+        const currentTaggerSpan = document.getElementById('current-tagger');
+        const winnerText = document.getElementById('winner-text');
+
+        let gameState = 'title'; // title, playing, gameOver
+        let gameTime = 60; // 制限時間
+        let timerInterval;
+
+        const playerSize = 25;
+        const playerSpeed = 6;
+        const player1 = { x: 200, y: 300, vx: 0, vy: 0, color: 'blue', isTagger: false };
+        const player2 = { x: 600, y: 300, vx: 0, vy: 0, color: 'red', isTagger: true };
+        
+        // タッチ後の連続無敵時間を設ける
+        let tagCooldown = 0; // フレーム数
+
+        // キー入力の状態
+        const keys = {
+            w: false, a: false, s: false, d: false,
+            i: false, j: false, k: false, l: false
+        };
+
+        window.addEventListener('keydown', (e) => { 
+            const key = e.key.toLowerCase();
+            if (keys.hasOwnProperty(key)) {
+                keys[key] = true;
+                e.preventDefault(); // 画面スクロールを防ぐ
+            }
+        });
+        window.addEventListener('keyup', (e) => { 
+            const key = e.key.toLowerCase();
+            if (keys.hasOwnProperty(key)) {
+                keys[key] = false; 
+            }
+        });
+
+        function showRules() {
+            titleScreen.classList.add('hidden');
+            gameoverScreen.classList.add('hidden');
+            ruleScreen.classList.remove('hidden');
+        }
+
+        function hideRules() {
+            ruleScreen.classList.add('hidden');
+            titleScreen.classList.remove('hidden');
+        }
+
+        function startGame() {
+            gameState = 'playing';
+            uiLayer.classList.add('hidden');
+            statusBar.classList.remove('hidden');
+            titleScreen.classList.add('hidden');
+            gameoverScreen.classList.add('hidden');
+            resetPlayers();
+            gameTime = 60;
+            timeLeftSpan.textContent = gameTime;
+            updateTaggerUI();
+            
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                gameTime--;
+                timeLeftSpan.textContent = gameTime;
+                if (gameTime <= 0) {
+                    endGame();
+                }
+            }, 1000);
+
+            gameLoop();
+        }
+
+        function resetPlayers() {
+            player1.x = 200; player1.y = canvas.height/2; player1.vx = 0; player1.vy = 0;
+            player2.x = canvas.width - 200; player2.y = canvas.height/2; player2.vx = 0; player2.vy = 0;
+            tagCooldown = 0;
+            
+            // ランダムに最初の鬼を決める
+            if (Math.random() < 0.5) {
+                player1.isTagger = true; player1.color = 'red';
+                player2.isTagger = false; player2.color = 'blue';
+            } else {
+                player1.isTagger = false; player1.color = 'blue';
+                player2.isTagger = true; player2.color = 'red';
+            }
+        }
+
+        function updateTaggerUI() {
+            currentTaggerSpan.textContent = (player1.isTagger ? 'P1 (赤)' : 'P2 (赤)');
+            currentTaggerSpan.style.color = 'red';
+        }
+
+        function endGame() {
+            gameState = 'gameOver';
+            clearInterval(timerInterval);
+            uiLayer.classList.remove('hidden');
+            gameoverScreen.classList.remove('hidden');
+            statusBar.classList.add('hidden');
+            
+            let winner = player1.isTagger ? 'プレイヤー2 (青)' : 'プレイヤー1 (青)';
+            winnerText.textContent = `${winner} の勝利！`;
+        }
+
+        function updatePlayers() {
+            // P1 (WASD)
+            player1.vx = 0; player1.vy = 0;
+            if (keys.w) player1.vy -= playerSpeed;
+            if (keys.s) player1.vy += playerSpeed;
+            if (keys.a) player1.vx -= playerSpeed;
+            if (keys.d) player1.vx += playerSpeed;
+            
+            // P2 (JKLI: J=左, K=下, L=右, I=上)
+            player2.vx = 0; player2.vy = 0;
+            if (keys.i) player2.vy -= playerSpeed; // I = Up
+            if (keys.k) player2.vy += playerSpeed; // K = Down
+            if (keys.j) player2.vx -= playerSpeed; // J = Left
+            if (keys.l) player2.vx += playerSpeed; // L = Right
+
+            // 移動
+            player1.x += player1.vx; player1.y += player1.vy;
+            player2.x += player2.vx; player2.y += player2.vy;
+
+            // 衝突判定（壁）
+            player1.x = Math.max(0, Math.min(canvas.width - playerSize, player1.x));
+            player1.y = Math.max(0, Math.min(canvas.height - playerSize, player1.y));
+            player2.x = Math.max(0, Math.min(canvas.width - playerSize, player2.x));
+            player2.y = Math.max(0, Math.min(canvas.height - playerSize, player2.y));
+
+            // 鬼ごっこロジック
+            if (tagCooldown > 0) {
+                tagCooldown--;
+            } else {
+                // 衝突判定（プレイヤー同士）
+                const dx = player1.x - player2.x;
+                const dy = player1.y - player2.y;
+                // 簡易的な矩形衝突判定
+                if (Math.abs(dx) < playerSize && Math.abs(dy) < playerSize) {
+                    switchTagger();
+                }
+            }
+        }
+
+        function switchTagger() {
+            player1.isTagger = !player1.isTagger;
+            player2.isTagger = !player2.isTagger;
+            player1.color = player1.isTagger ? 'red' : 'blue';
+            player2.color = player2.isTagger ? 'red' : 'blue';
+            updateTaggerUI();
+            tagCooldown = 60; // 約1秒間の無敵時間
+            
+            // 衝突直後の押し出し
+            const dx = player1.x - player2.x;
+            const dy = player1.y - player2.y;
+            const angle = Math.atan2(dy, dx);
+            const pushDistance = playerSize * 1.5;
+            player1.x += Math.cos(angle) * pushDistance;
+            player1.y += Math.sin(angle) * pushDistance;
+            player2.x -= Math.cos(angle) * pushDistance;
+            player2.y -= Math.sin(angle) * pushDistance;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // プレイヤー描画
+            ctx.fillStyle = player1.color;
+            ctx.fillRect(player1.x, player1.y, playerSize, playerSize);
+
+            ctx.fillStyle = player2.color;
+            ctx.fillRect(player2.x, player2.y, playerSize, playerSize);
+            
+            // 無敵時間の視覚効果
+            if (tagCooldown > 0 && tagCooldown % 10 < 5) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                if (player1.isTagger) {
+                    ctx.fillRect(player1.x, player1.y, playerSize, playerSize);
+                } else {
+                    ctx.fillRect(player2.x, player2.y, playerSize, playerSize);
+                }
+            }
+        }
+
+        function gameLoop() {
+            if (gameState === 'playing') {
+                updatePlayers();
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+        }
+    </script>
+</body>
+</html>
